@@ -20,9 +20,11 @@ def load_train_dataset():
 	# 	for item in out:
 	# 		train_dataset.append(item)
 	# 		f.write("%s\n" % item)
-	with open('small_data.txt', 'r') as f:
+	with open('train_data.txt', 'r') as f:
 		for item in f:
-			k=[int(e) for e in item[:3].split(',')]
+			item=item[1:]
+			item=item[:len(item)-2]
+			k=[int(e) for e in item.split(',')]
 			train_dataset.append(k)
 			#f.write("%s\n" % item)
 
@@ -141,7 +143,7 @@ def dot(K, L):
 	if len(K) != len(L):
 		return 0
 
-   return [i[0] * i[1] for i in zip(K, L)]
+	return [i[0] * i[1] for i in zip(K, L)]
 
 def dot_11(K, L):
 	
@@ -159,10 +161,15 @@ def dot_d1(K, L):
 	
 	return mat
 
+
+def relu(x):
+	x=np.array(x)
+	return list(np.maximum(x,0))
+
 train_dataset=load_train_dataset()
 #test_dataset=load_test_dataset()
 
-print(train_dataset[:10])
+#print(train_dataset[:10])
 users_list=sorted(list(set(column(train_dataset,0))))
 no_users=len(users_list)
 print('Total users:	',no_users)
@@ -180,9 +187,10 @@ for i in range(len(train_dataset)):
 	interaction_matrix[a][b]=1
 
 x=np.array(interaction_matrix)
-print('interaction_matrix:\n',interaction_matrix,'\nShape of Rating Matrix:',x.shape)
+#print('interaction_matrix:\n',interaction_matrix,'\nShape of Rating Matrix:',x.shape)
+print('\nShape of Rating Matrix:',x.shape)
 d=50
-m_factors=MF(x,d,0.0002,0.02,1000)
+m_factors=MF(x,d,0.0002,0.02,20)
 m_factors.train()
 
 U_memory=m_factors.P
@@ -191,27 +199,35 @@ I_memory=m_factors.Q
 print(U_memory.shape,I_memory.shape)
 #print('\nFull rating',type(m_factors.full_matrix))
 
-generated_interaction_matrix=interaction_matrix
+generated_interaction_matrix=[[0 for i in range(no_items)] for j in range(no_users)]
 for i in range(no_users):
 	for j in range(no_items):
 		generated_interaction_matrix[i][j]=m_factors.get_rating(i,j)
 
-print(generated_interaction_matrix)
+#print(generated_interaction_matrix)
 
+#interaction_matrix=generated_interaction_matrix
+#print((interaction_matrix))
 #qui matrix construction
 User_preference=[[None for i in range(no_items)] for j in range(no_users)]
 
 for i in range(len(U_memory)):
 	mu = U_memory[i]
+	#print(mu)
 	for j in range(len(I_memory)):
 		ei = I_memory[j]
 		qui = []
 		for k in range(len(interaction_matrix)):
 			if interaction_matrix[k][j] == 1:
 				mv = U_memory[k]
-				quiv = dot_11(mu, mv) + dot_11(ei, mv)
+				duv=dot_11(mu, mv)
+				dev=dot_11(ei, mv)
+				quiv = [[duv[a][b]+dev[a][b] for b in range(len(duv))] for a in range(len(duv))]
+				#print(len(quiv),len(quiv[0]))
 				qui.append(quiv)
 		User_preference[i][j] = qui
+
+print(len(User_preference[0][0][0]),len(User_preference[0][0][0][0]))
 
 Attention_weights=[[None for i in range(no_items)] for j in range(no_users)]
 for i in range(len(U_memory)):
@@ -219,38 +235,50 @@ for i in range(len(U_memory)):
 		exps=[]
 		for k in range(len(User_preference[i][j])):
 			exps.append(list(np.exp(User_preference[i][j][k])))
-		sum_exps=[[0 for i in range(d)] for j in range(d)]
+		sum_exps=[[0 for a in range(d)] for b in range(d)]
 		for k in range(len(exps)):
-			for i in range(d):
-				for j in range(d):
-					sum_exps[i][j]+=exps[k][i][j]
+			for a in range(d):
+				for b in range(d):
+					sum_exps[a][b]+=exps[k][a][b]
 		pui=[]
 		for k in range(len(exps)):
 			#puiv=exps[k]/sum_exps
-			puiv=[[0 for i in range(d)] for j in range(d)]
-			for i in range(d):
-				for j in range(d):
-					puiv[i][j]=exps[k][i][j]/sum_exps[i][j]
+			puiv=[[0 for a in range(d)] for b in range(d)]
+			for a in range(d):
+				for b in range(d):
+					puiv[a][b]=exps[k][a][b]/sum_exps[a][b]
 			pui.append(puiv)
+		#print(len(puiv),len(puiv[0]))
 		Attention_weights[i][j]=pui 
 
+#print(Attention_weights[0][0][0].shape())
+
 C=U_memory
-Weighted_sums=[[0 for i in range(no_items)] for j in range(no_users)]
+Weighted_sums=[[None for i in range(no_items)] for j in range(no_users)]
 for i in range(len(U_memory)):
 	for j in range(len(I_memory)):
 		for k in range(len(User_preference[i][j])):
-			Weighted_sums[i][j]+=dot_d1(puiv,C[k])
+			dpc=dot_d1(Attention_weights[i][j][k],C[k])
+			#print(len(dpc))
+			if Weighted_sums[i][j]==None:
+				Weighted_sums[i][j]=dpc
+			else:
+				Weighted_sums[i][j]=[dpc[b]+Weighted_sums[i][j][b] for b in range(len(dpc))]
+print(len(Weighted_sums[0][0]))
 
 U_matrix=[[0 for i in range(d)] for j in range(d)]
 W_matrix=[[0 for i in range(d)] for j in range(d)]
 
-rating_score=[[0 for i in range(no_items)] for j in range(no_users)]
+vt=[0 for i in range(d)]
+b=[0 for i in range(d)]
 
+rating_score=[[0 for i in range(no_items)] for j in range(no_users)]
 
 
 for i in range(no_users):
 	for j in range(no_items):
-		t1=dot_d1(U,dot(U_memory[i],I_memory[j]))
-		t2=dot_d1(W,Weighted_sums[i][j])
+		t1=dot_d1(U_matrix,dot(U_memory[i],I_memory[j]))
+		t2=dot_d1(W_matrix,Weighted_sums[i][j])
 		t3=b
-		rating_score[i][j]= dot_11(vt,relu(t1+t2+t3))
+		terms_sum=[t1[a]+t2[a]+t3[a] for a in range(len(t1))]
+		rating_score[i][j]= dot_11(vt,relu(terms_sum))
